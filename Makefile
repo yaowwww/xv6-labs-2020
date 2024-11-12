@@ -149,6 +149,10 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+        $U/_sleep\
+	$U/_pingpong\
+	$U/_find\
+	$U/_xargs\
 
 
 ifeq ($(LAB),syscall)
