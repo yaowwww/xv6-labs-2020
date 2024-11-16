@@ -20,7 +20,7 @@ struct run {
 
 struct {
   struct spinlock lock;
-  struct run *freelist;
+  struct run *freelist;   //空闲内存的列表
 } kmem;
 
 void
@@ -79,4 +79,19 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+uint64 acquire_freemem(){
+  struct run *r; //链表
+  uint64 count = 0;
+
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+
+  while(r){
+    r = r->next;
+    count++;     //统计链表长度
+  }
+  release(&kmem.lock);
+  return count*PGSIZE;    //页表个数*页表大小=系统空闲内存的大小
 }
