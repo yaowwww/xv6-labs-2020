@@ -179,6 +179,16 @@ int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 
+void            free_proc_kpt(pagetable_t);     // 将进程的内核页表保存到SATP寄存器
+void            proc_kvmmap(pagetable_t, uint64, uint64, uint64, int);
+pagetable_t     proc_kpt_init();          // 用于内核页表的初始化
+void            proc_kvminithart(pagetable_t);
+void            u2k_vmcopy(pagetable_t, pagetable_t, uint64, uint64);
+
+//vmcopyin.c
+int             copyin_new(pagetable_t, char *, uint64, uint64);
+int             copyinstr_new(pagetable_t, char *, uint64, uint64);
+
 // plic.c
 void            plicinit(void);
 void            plicinithart(void);
@@ -201,6 +211,7 @@ void            statsinc(void);
 
 // sprintf.c
 int             snprintf(char*, int, char*, ...);
+
 
 #ifdef LAB_NET
 // pci.c

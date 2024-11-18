@@ -31,15 +31,15 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
 
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // // Allocate a page for the process's kernel stack.     //迁移
+      // // Map it high in memory, followed by an invalid
+      // // guard page.
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
   kvminithart();
 }
@@ -120,6 +120,21 @@ found:
     release(&p->lock);
     return 0;
   }
+  // Init the kernal page table
+  p->kpt = proc_kpt_init();
+  if(p->kpt == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+   // 申请内核栈，确保每一个进程的内核页表都关于该进程的内核栈有一个映射
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int) (p - proc));
+  proc_kvmmap(p->kpt, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -128,6 +143,8 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   return p;
+
+  
 }
 
 // free a proc structure and the data hanging from it,
@@ -150,6 +167,14 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  // free the kernel stack in the RAM 释放一个进程的内核栈
+  uvmunmap(p->kpt, p->kstack, 1, 1);
+  p->kstack = 0;
+  
+  // 释放内核页表
+  free_proc_kpt(p->kpt);
+  p->kpt = 0;
 }
 
 // Create a user page table for a given process,
@@ -221,6 +246,9 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // 复制一份到内核页表
+  u2k_vmcopy(p->pagetable, p->kpt, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -243,9 +271,15 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    // 加上PLIC限制
+    if(PGROUNDUP(sz+n) >= PLIC){
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    // 复制一份到内核页表
+    u2k_vmcopy(p->pagetable, p->kpt, sz - n, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -274,7 +308,8 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  // 复制到新进程的内核页表
+  u2k_vmcopy(np->pagetable, np->kpt, 0, np->sz);
   np->parent = p;
 
   // copy saved user registers.
@@ -308,7 +343,7 @@ reparent(struct proc *p)
   struct proc *pp;
 
   for(pp = proc; pp < &proc[NPROC]; pp++){
-    // this code uses pp->parent without holding pp->lock.
+    // this code uses pp->parent without holding pp->lock.userinit
     // acquiring the lock first could cause a deadlock
     // if pp or a child of pp were also in exit()
     // and about to try to lock p.
@@ -458,6 +493,8 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+
+  
   
   c->proc = 0;
   for(;;){
@@ -466,6 +503,7 @@ scheduler(void)
     
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
+
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
@@ -473,8 +511,11 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // 加载进程的内核页表到核心的satp寄存器
+        proc_kvminithart(p->kpt);
         swtch(&c->context, &p->context);
-
+        //Come back to the global kernel page table 没有进程运行时应当使用kernel_pagetable
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;

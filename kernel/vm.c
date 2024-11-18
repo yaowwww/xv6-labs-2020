@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -55,6 +57,7 @@ kvminithart()
   w_satp(MAKE_SATP(kernel_pagetable));
   sfence_vma();
 }
+
 
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
@@ -132,7 +135,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kpt, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -379,23 +382,25 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  return copyin_new(pagetable, dst, srcva, len);
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+  // uint64 n, va0, pa0;
 
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  // while(len > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > len)
+  //     n = len;
+  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+
+  //   len -= n;
+  //   dst += n;
+  //   srcva = va0 + PGSIZE;
+  // }
+  // return 0;
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -405,38 +410,151 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
+  return copyinstr_new(pagetable, dst, srcva, max);
 
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
+  // uint64 n, va0, pa0;
+  // int got_null = 0;
 
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
+  // while(got_null == 0 && max > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > max)
+  //     n = max;
 
-    srcva = va0 + PGSIZE;
+  //   char *p = (char *) (pa0 + (srcva - va0));
+  //   while(n > 0){
+  //     if(*p == '\0'){
+  //       *dst = '\0';
+  //       got_null = 1;
+  //       break;
+  //     } else {
+  //       *dst = *p;
+  //     }
+  //     --n;
+  //     --max;
+  //     p++;
+  //     dst++;
+  //   }
+
+  //   srcva = va0 + PGSIZE;
+  // }
+  // if(got_null){
+  //   return 0;
+  // } else {
+  //   return -1;
+  // }
+}
+
+void vmprint(pagetable_t pagetable, uint64 depth){  //页表，递归深度
+  if(depth == 0){
+    printf("page table %p\n",pagetable);
   }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V ){     //// PTE_V每个页表项是否有效
+      for (int j = 0; j < depth; j++){     //打印级数
+        if (j) 
+          printf(" ");
+        printf("..");
+      }
+      uint64 child = PTE2PA(pte);      // //当前页表项转化为物理地址
+      printf("%d: pte %p pa %p\n", i, pte, child);      //i为页表项索引
+      //当前页表项（PTE）是否指向一个下一级的页表，而不是一个具体的物理页面
+      //第三级页表存放的是物理地址，页表中页表项中W位，R位，X位起码有一位会被设置为1。如果是索引页表则这些值是0
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0)
+        vmprint((pagetable_t)child, depth+1);
+    }
+  }
+}
+
+// 为进程的内核页表新建一个初始化函数
+pagetable_t proc_kpt_init()
+{
+  pagetable_t kpt = (pagetable_t) kalloc();   //创建一个新的页表
+  memset(kpt, 0, PGSIZE);
+
+  // uart registers
+  proc_kvmmap(kpt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  proc_kvmmap(kpt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  proc_kvmmap(kpt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  proc_kvmmap(kpt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  proc_kvmmap(kpt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  proc_kvmmap(kpt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  proc_kvmmap(kpt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kpt;
+}
+
+// kvmmap是为内核页表的虚拟地址与物理地址做映射，这里需要重新添加一个类似的函数,新增传入页表参数
+void proc_kvmmap(pagetable_t kpt, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpt, va, sz, pa, perm) != 0)
+    panic("new_kvmmap");
+}
+
+void
+free_proc_kpt(pagetable_t pagetable)// 仿照freewalk，释放进程的内核页表
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      pagetable[i] = 0;
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){// 说明不是第三级，进行递归
+        free_proc_kpt((pagetable_t)child);
+      }
+    } 
+  }
+  kfree((void*)pagetable);
+}
+
+void
+proc_kvminithart(pagetable_t kpt){    //实现传递页表指针copy
+  w_satp(MAKE_SATP(kpt));
+  sfence_vma();
+}
+
+//3.3
+// 仿照uvmcopy()函数，实现将用户空间的映射添加到每个进程的内核页表
+void 
+u2k_vmcopy(pagetable_t pagetable, pagetable_t kpt, uint64 oldsz, uint64 newsz){
+  pte_t *pte_from;
+  pte_t *pte_to;
+  oldsz = PGROUNDUP(oldsz);
+
+  for(uint64 i = oldsz; i < newsz; i += PGSIZE){
+    // 对页表pagetable中虚拟地址为i进行检查，检查pte是否存在
+    if((pte_from = walk(pagetable, i, 0)) == 0)
+      panic("u2k_vmcopy: pte should exist");
+    // 对内核页表kpt中虚拟地址为i进行检查，检查pte是否存在，若不存在则申请物理内存并映射。
+    if((pte_to = walk(kpt, i, 1)) == 0){
+      panic("u2k_vmcopy: pte walk fail");
+    }
+    // 在内核模式下，无法访问设置了PTE_U的页面,
+    // 所以接下来要获得pagetable中虚拟地址为i的pte的标志位
+    
+    // uint64 pa = PTE2PA(*pte_from);
+    // uint flags = (PTE_FLAGS(*pte_from)) & (~PTE_U);
+    // *pte_to = PA2PTE(pa) | flags;
+    // 感觉上面三句有点多，改成一句
+    *pte_to = (*pte_from) & (~PTE_U);
   }
 }
