@@ -68,6 +68,24 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+
+  char* memory;            //新分配的物理地址，用于存储分配的内存块的指针
+  struct proc *p = myproc();
+
+  if(walkaddr(p->pagetable, *ip) == 0) {     //虚拟地址没有映射
+    
+    if(PGROUNDUP(p->trapframe->sp) - 1 < *ip && *ip < p->sz && (memory = kalloc()) != 0){
+      memset(memory, 0, PGSIZE);      //将新分配的内存清零
+      //使用 mappages 函数将新分配的内存映射到用户页表中，设置页面权限为可读、可写、可执行（PTE_W|PTE_X|PTE_R|PTE_U）。
+      if(mappages(p->pagetable, PGROUNDDOWN(*ip), PGSIZE, (uint64)memory, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+        //返回非零值，映射失败
+        kfree(memory);
+        return -1;      
+      }
+    } else{
+      return -1;
+    }
+  }
   return 0;
 }
 

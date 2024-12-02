@@ -68,8 +68,27 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if(r_scause() == 13||r_scause() == 15){//页面错误
-    uint64 va = r_scause();
-    // if()
+    uint64 va = r_stval();    //造成页面错误的虚拟地址
+
+    char* memory;            //新分配的物理地址，用于存储分配的内存块的指针
+
+    //p->trapframe->sp 当前进程的栈指针
+    if(PGROUNDUP(p->trapframe->sp) - 1 < va && va < p->sz && (memory = kalloc()) != 0){
+      memset(memory, 0, PGSIZE);      //将新分配的内存清零
+
+      //使用 mappages 函数将新分配的内存映射到用户页表中，设置页面权限为可读、可写、可执行（PTE_W|PTE_X|PTE_R|PTE_U）。
+      if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)memory, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+        //返回非零值，映射失败
+        kfree(memory);
+        p->killed = 1;      //终止该进程
+      }
+    } else{    //非法的虚拟地址
+    // printf("用户访问非法虚拟地址\n");
+      p->killed = 1;
+    }
+
+
+    
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
