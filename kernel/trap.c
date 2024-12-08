@@ -34,7 +34,7 @@ trapinithart(void)
 // called from trampoline.S
 //
 void
-usertrap(void)
+usertrap(void) 
 {
   int which_dev = 0;
 
@@ -50,7 +50,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  if(r_scause() == 8){         //触发陷阱的原因是系统调用（scause 值为8），则执行系统调用处理。
     // system call
 
     if(p->killed)
@@ -65,9 +65,16 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if((which_dev = devintr()) != 0){       //触发陷阱的原因是设备中断，devintr 函数会处理中断，并且返回中断处理的设备编号。
     // ok
-  } else {
+  } else if(r_scause() == 13 || r_scause() == 15) {             //触发陷阱的原因是否是存储访问错误
+    uint64 fault_va = r_stval();    // 获取出错的虚拟地址
+    if(fault_va >= p->sz                                          //检查出错的虚拟地址是否超出了进程的内存大小
+    || is_cowpage(p->pagetable, fault_va) != 0                    //检查导致页面故障的页面是否是一个Copy-on-Write页面
+    || cowalloc(p->pagetable, PGROUNDDOWN(fault_va)) == 0)        //尝试分配一个新的物理页面
+      p->killed = 1;                                                //试图访问非法内存或无法处理的页面故障,终止进程
+
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
