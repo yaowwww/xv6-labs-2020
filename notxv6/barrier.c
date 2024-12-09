@@ -26,6 +26,20 @@ static void
 barrier()
 {
   // YOUR CODE HERE
+  pthread_mutex_lock(&bstate.barrier_mutex); 
+  bstate.nthread++; //完成调用barrier线程的数量
+
+  if(bstate.nthread == nthread){//满足条件后唤醒所有线程
+    bstate.round++;
+    bstate.nthread = 0;
+    // 唤醒睡在cond的所有线程
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  } else{
+    // 在cond上进入睡眠，释放锁mutex，在醒来时重新获取
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+  }
+  pthread_mutex_unlock(&bstate.barrier_mutex);
+  
   //
   // Block until all threads have called barrier() and
   // then increment bstate.round.
