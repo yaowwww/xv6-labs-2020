@@ -41,7 +41,7 @@ extern struct cpu cpus[NCPU];
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
-struct trapframe {
+struct trapframe {      //指向一个每个进程的陷阱帧
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
   /*  16 */ uint64 kernel_trap;   // usertrap()
@@ -103,4 +103,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int ticks_count;             //“滴答”计数
+  int alarm_interval;          //报警间隔
+  uint64 (*handler)();         //指向处理程序函数的指针
+
+  int is_alarming;                    // 是否正在执行告警处理函数
+  struct trapframe* alarm_trapframe;  // 告警陷阱帧
 };

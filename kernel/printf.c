@@ -122,6 +122,7 @@ panic(char *s)
   printf(s);
   printf("\n");
   panicked = 1; // freeze uart output from other CPUs
+  backtrace();
   for(;;)
     ;
 }
@@ -131,4 +132,19 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+void
+backtrace(){
+  printf("backtrace:\n");
+  uint64 fp = r_fp();
+  uint64 *frame = (uint64*) fp;
+  while (PGROUNDUP(fp) - PGROUNDDOWN(fp) == PGSIZE) {//判断合法栈帧
+    // 返回地址位于栈帧帧指针的固定偏移(-8)位置
+    printf("%p\n", frame[-1]);
+    // 更新下一个栈帧,前一个帧指针保存在-16偏移的位置
+    fp = frame[-2]; 
+
+    frame = (uint64*) fp;
+  }
 }
